@@ -589,47 +589,46 @@ function buildChips(lms){
   const view = detectView(lms);
   const stance = detectStance(lms);
   const side = betterSide(lms);
-  const S = side==='r' ? {sh:L.rsh,el:L.rel,wr:L.rwr,idx:L.rindex,pnk:L.rpinky,hip:L.rhip,knee:L.rknee,ank:L.rank}
-                       : {sh:L.lsh,el:L.lel,wr:L.lwr,idx:L.lindex,pnk:L.lpinky,hip:L.lhip,knee:L.lknee,ank:L.lank};
+  const S = side==='r' ? {sh:L.rsh,el:L.rel,wr:L.rwr,hip:L.rhip,knee:L.rknee,ank:L.rank}
+                       : {sh:L.lsh,el:L.lel,wr:L.lwr,hip:L.lhip,knee:L.lknee,ank:L.lank};
   const F = side==='r' ? {hip:L.lhip,knee:L.lknee,ank:L.lank}
                        : {hip:L.rhip,knee:L.rknee,ank:L.rank};
 
   function chipsFor(){
     if(view==='profile'){
       const wrist = pt(lms,S.wr);
-      const palm = mid(pt(lms,S.idx), pt(lms,S.pnk));
       const elbow = pt(lms,S.el);
       const shoulder = pt(lms,S.sh);
       const hip = pt(lms,S.hip);
       const knee = pt(lms,S.knee);
       const ankle = pt(lms,S.ank);
-      const chest = lerp(shoulder, hip, 0.28);
-      const belly = lerp(shoulder, hip, 0.65);
+      const ribs = lerp(shoulder, hip, 0.35);
+      // T1 vertebra / base-of-neck proxy: partway from shoulder toward the nose
+      const neckT1 = lerp(shoulder, pt(lms,L.nose), 0.35);
       const farVis = (vis(lms,F.hip)+vis(lms,F.knee)+vis(lms,F.ank))/3;
       return { view, stance, side,
-        palm, wrist, elbow, shoulder, chest, belly, hip, knee, ankle,
+        wrist, elbow, shoulder, neckT1, ribs, hip, knee, ankle,
         // for note-angle math
         elbowA:{a:shoulder,b:elbow,c:wrist}, kneeA:{a:hip,b:knee,c:ankle},
         farHip:pt(lms,F.hip), farKnee:pt(lms,F.knee), farAnkle:pt(lms,F.ank), farVis,
-        lineRef:[palm,wrist,elbow,shoulder,chest,belly,hip,knee,ankle]
+        lineRef:[wrist,elbow,shoulder,neckT1,ribs,hip,knee,ankle]
       };
     }else{
       const wrist = mid(pt(lms,L.lwr),pt(lms,L.rwr));
-      const palm = mid(mid(pt(lms,L.lindex),pt(lms,L.lpinky)), mid(pt(lms,L.rindex),pt(lms,L.rpinky)));
       const elbow = mid(pt(lms,L.lel),pt(lms,L.rel));
       const shoulder = mid(pt(lms,L.lsh),pt(lms,L.rsh));
       const hip = mid(pt(lms,L.lhip),pt(lms,L.rhip));
       const knee = mid(pt(lms,L.lknee),pt(lms,L.rknee));
       const ankle = mid(pt(lms,L.lank),pt(lms,L.rank));
-      const chest = lerp(shoulder, hip, 0.28);
-      const belly = lerp(shoulder, hip, 0.65);
+      const ribs = lerp(shoulder, hip, 0.35);
+      const neckT1 = lerp(shoulder, pt(lms,L.nose), 0.35);
       return { view, stance, side,
-        palm, wrist, elbow, shoulder, chest, belly, hip, knee, ankle,
+        wrist, elbow, shoulder, neckT1, ribs, hip, knee, ankle,
         shL:pt(lms,L.lsh), shR:pt(lms,L.rsh), hipL:pt(lms,L.lhip), hipR:pt(lms,L.rhip),
         wristL:pt(lms,L.lwr), wristR:pt(lms,L.rwr),
         kneeL:pt(lms,L.lknee), kneeR:pt(lms,L.rknee), ankL:pt(lms,L.lank), ankR:pt(lms,L.rank),
         elbowA:{a:shoulder,b:elbow,c:wrist}, kneeA:{a:hip,b:knee,c:ankle},
-        lineRef:[palm,wrist,elbow,shoulder,chest,belly,hip,knee,ankle]
+        lineRef:[wrist,elbow,shoulder,neckT1,ribs,hip,knee,ankle]
       };
     }
   }
@@ -668,18 +667,26 @@ function perpDist(p, line){
 function analyzeAlignment(chips, gs){
   const notes = [];
   let score = 100;
+  const isFront = chips.view === 'front';
 
   const line = fitLine(chips.lineRef);
   const bodyLen = dist(chips.shoulder, chips.ankle) || 0.3;
 
-  // colinearity (how well all points sit on one straight line)
+  // colinearity (how well all points sit on one straight line).
+  // Front view can't see forward/back arching (that plane is invisible
+  // face-on), so this signal is weighted lighter there and profile view
+  // carries the strict version of this check.
   const devs = chips.lineRef.map(p => Math.abs(perpDist(p, line)));
   const rms = Math.sqrt(devs.reduce((s,d)=>s+d*d,0)/devs.length) / bodyLen;
-  score -= Math.min(40, rms * 750);
+  const colinCap = isFront ? 16 : 38;
+  const colinPenalty = Math.min(colinCap, rms * (isFront ? 300 : 700));
+  score -= colinPenalty;
 
   // verticality of the stack line
   const tiltDeg = 90 - Math.abs((Math.atan2(Math.abs(line.dir.y), Math.abs(line.dir.x)))*180/Math.PI);
-  score -= Math.min(16, Math.abs(tiltDeg)*0.8);
+  const tiltCap = isFront ? 8 : 16;
+  const tiltPenalty = Math.min(tiltCap, Math.abs(tiltDeg)*(isFront?0.5:0.8));
+  score -= tiltPenalty;
 
   // elbows
   const elbowAngle = angleAt(chips.elbowA.a, chips.elbowA.b, chips.elbowA.c);
@@ -695,37 +702,49 @@ function analyzeAlignment(chips, gs){
     score -= Math.min(24, (170-kneeAngle)*1.3);
   }
 
-  // hip / shoulder deviation from the line -> belly / shoulder / glute cues
+  // hip / shoulder / neck deviation from the line -> belly / shoulder / glute cues
+  // (secondary signal on front view — see colinearity note above)
   const hipDev = perpDist(chips.hip, line) / bodyLen;
   const shDev = perpDist(chips.shoulder, line) / bodyLen;
-  const THRESH = 0.018;
+  const neckDev = perpDist(chips.neckT1, line) / bodyLen;
+  const THRESH = isFront ? 0.03 : 0.018;
+  const devCap = isFront ? 10 : 22;
+  const devMult = isFront ? 160 : 340;
   if(Math.abs(hipDev) > THRESH){
     if(hipDev > 0) notes.push('Engage core / tuck belly (hips tilt forward off the line)');
     else notes.push('Squeeze glutes (hips pushed back off the line)');
-    score -= Math.min(22, Math.abs(hipDev)*340);
+    score -= Math.min(devCap, Math.abs(hipDev)*devMult);
   }
   if(Math.abs(shDev) > THRESH){
     notes.push('Open shoulders (shoulders off the body line)');
-    score -= Math.min(20, Math.abs(shDev)*340);
+    score -= Math.min(devCap, Math.abs(shDev)*devMult);
+  }
+  if(Math.abs(neckDev) > THRESH){
+    notes.push('Keep head/neck in line (tucked too far in or out)');
+    score -= Math.min(devCap*0.8, Math.abs(neckDev)*devMult);
   }
 
-  // legs together — front/back view: knees & ankles must stay adducted
-  if(chips.view === 'front'){
+  // front/back view — this is where the camera can actually see adduction,
+  // so legs together & hands together are the primary scored checks here
+  if(isFront){
     const kneeGap = dist(chips.kneeL, chips.kneeR) / bodyLen;
     const ankGap = dist(chips.ankL, chips.ankR) / bodyLen;
     const hipGap = dist(chips.hipL, chips.hipR) / bodyLen;
-    if(kneeGap > hipGap*0.7){ notes.push('Bring knees together'); score -= 12; }
-    if(ankGap > hipGap*0.7){ notes.push('Bring ankles together'); score -= 12; }
+    const wristGap = dist(chips.wristL, chips.wristR) / bodyLen;
+    const shGap = dist(chips.shL, chips.shR) / bodyLen;
+    if(kneeGap > hipGap*0.65){ notes.push('Bring knees together'); score -= 16; }
+    if(ankGap > hipGap*0.65){ notes.push('Bring ankles together'); score -= 16; }
+    if(wristGap > shGap*0.35){ notes.push('Bring hands closer together'); score -= 16; }
 
     // two straight lines: shoulder line & hip line should be level (perpendicular to stack line)
     const shAngle = Math.atan2(chips.shR.y-chips.shL.y, chips.shR.x-chips.shL.x)*180/Math.PI;
     const hipAngle = Math.atan2(chips.hipR.y-chips.hipL.y, chips.hipR.x-chips.hipL.x)*180/Math.PI;
-    if(Math.abs(shAngle) > 6){ notes.push('Open shoulders (shoulder line not level)'); score -= 10; }
-    if(Math.abs(hipAngle) > 6){ notes.push('Squeeze glutes (hip line not level)'); score -= 10; }
+    if(Math.abs(shAngle) > 6){ notes.push('Level out the shoulders (shoulder line not level)'); score -= 8; }
+    if(Math.abs(hipAngle) > 6){ notes.push('Level out the hips (hip line not level)'); score -= 8; }
   }
 
   // profile view — check the far (hidden) leg too, when MediaPipe can still estimate it
-  if(chips.view === 'profile' && chips.farVis > 0.15){
+  if(!isFront && chips.farVis > 0.15){
     const farKneeAngle = angleAt(chips.farHip, chips.farKnee, chips.farAnkle);
     if(farKneeAngle < 168){
       notes.push('Straighten the back (hidden) leg — it is bent and breaking the hip line');
@@ -736,6 +755,13 @@ function analyzeAlignment(chips, gs){
       notes.push('Bring your legs/feet together — the back leg is drifting apart');
       score -= 10;
     }
+  }
+
+  // never claim a clean result while the overall line is visibly off —
+  // if no specific joint issue tripped but the line itself is crooked,
+  // say so instead of reporting a false "perfect"
+  if(notes.length===0 && (colinPenalty+tiltPenalty) > 6){
+    notes.push('Overall body line is not fully straight — compare against the reference line beside you');
   }
 
   score = Math.max(0, Math.min(100, Math.round(score)));
@@ -774,11 +800,11 @@ function roundRect(ctx,x,y,w,h,r){
 }
 
 const CHIP_COLORS = {
-  palm:'#2be8c8', wrist:'#2be8c8', elbow:'#ffd23f', shoulder:'#ff9f4a',
-  chest:'#ff6b9d', belly:'#c77dff', hip:'#ff4d5e', knee:'#4dd0ff', ankle:'#34d399'
+  wrist:'#2be8c8', elbow:'#ffd23f', shoulder:'#ff9f4a', neckT1:'#c77dff',
+  ribs:'#ff6b9d', hip:'#ff4d5e', knee:'#4dd0ff', ankle:'#34d399'
 };
-const CHIP_ORDER = ['palm','wrist','elbow','shoulder','chest','belly','hip','knee','ankle'];
-const CHIP_LABELS = {palm:'Palm',wrist:'Wrist',elbow:'Elbow',shoulder:'Shoulder',chest:'Sternum',belly:'Belly',hip:'Hip',knee:'Knee',ankle:'Ankle'};
+const CHIP_ORDER = ['wrist','elbow','shoulder','ribs','hip','knee','ankle'];
+const CHIP_LABELS = {wrist:'Wrist',elbow:'Elbow',shoulder:'Shoulder',neckT1:'Neck (T1)',ribs:'Ribs',hip:'Pelvis',knee:'Knee',ankle:'Ankle'};
 
 // a thick, round-capped stroke reads as a solid capsule/bone shape on canvas
 function strokeBone(ctx, x1,y1,x2,y2, width, color, highlight){
@@ -815,26 +841,39 @@ function drawSkeleton(ctx, chips, w, h){
   ctx.save();
   const boneW = Math.max(7, Math.min(w,h)*0.032);
   const P = k => ({x:chips[k].x*w, y:chips[k].y*h});
+  const chainPts = CHIP_ORDER.map(P);
+  const neckP = P('neckT1');
 
-  // fitted straight target line, drawn first so the volumetric bones sit on top
-  const line = fitLine(chips.lineRef);
-  const len = Math.max(w,h)*1.3;
+  // ---- plumb reference line placed beside the figure, with thin tie-lines
+  // to every chip so deviation from a true straight line is directly visible
+  const allPts = [...chainPts, neckP];
+  const maxX = Math.max(...allPts.map(p=>p.x));
+  const minY = Math.min(...allPts.map(p=>p.y)) - boneW*2;
+  const maxY = Math.max(...allPts.map(p=>p.y)) + boneW*2;
+  const margin = Math.max(26, w*0.08);
+  // drop the plumb line from the base of support (hand for handstand, foot for standing)
+  const anchor = chips.stance === 'handstand' ? P('wrist') : P('ankle');
+  let refX = anchor.x - margin;
+  if(refX < margin*0.6) refX = maxX + margin; // keep it on-canvas if too close to the edge
+
   ctx.save();
-  ctx.strokeStyle = 'rgba(255,255,255,.5)';
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([2,5]);
-  ctx.beginPath();
-  ctx.moveTo((line.origin.x - line.dir.x*len/w)*w, (line.origin.y - line.dir.y*len/h)*h);
-  ctx.lineTo((line.origin.x + line.dir.x*len/w)*w, (line.origin.y + line.dir.y*len/h)*h);
-  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,.55)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([3,6]);
+  ctx.beginPath(); ctx.moveTo(refX, minY); ctx.lineTo(refX, maxY); ctx.stroke();
   ctx.setLineDash([]);
+  ctx.strokeStyle = 'rgba(255,255,255,.35)';
+  ctx.lineWidth = 1;
+  allPts.forEach(p=>{ ctx.beginPath(); ctx.moveTo(refX, p.y); ctx.lineTo(p.x, p.y); ctx.stroke(); });
   ctx.restore();
 
   // main measured stack — thick capsule "bones" between each chip
-  for(let i=0;i<CHIP_ORDER.length-1;i++){
-    const a = P(CHIP_ORDER[i]), b = P(CHIP_ORDER[i+1]);
-    strokeBone(ctx, a.x,a.y,b.x,b.y, boneW, 'rgba(43,232,200,.55)', '#ffffff');
+  for(let i=0;i<chainPts.length-1;i++){
+    strokeBone(ctx, chainPts[i].x,chainPts[i].y, chainPts[i+1].x,chainPts[i+1].y, boneW, 'rgba(43,232,200,.55)', '#ffffff');
   }
+  // neck/T1 branches off the shoulder
+  const shP = P('shoulder');
+  strokeBone(ctx, shP.x,shP.y, neckP.x,neckP.y, boneW*0.7, 'rgba(199,125,255,.6)', '#ffffff');
 
   // front/back view — mark the actual limb points (both hands, both feet) and level lines
   if(chips.view==='front' && chips.shL){
@@ -862,6 +901,7 @@ function drawSkeleton(ctx, chips, w, h){
     const p = chips[k];
     drawJoint(ctx, p.x*w, p.y*h, k==='hip' ? boneW*0.52 : boneW*0.44, CHIP_COLORS[k]);
   });
+  drawJoint(ctx, neckP.x, neckP.y, boneW*0.4, CHIP_COLORS.neckT1);
   ctx.restore();
 }
 
@@ -892,9 +932,12 @@ function renderResult(frame){
   const list = $('#notesList');
   const card = $('#notesCard');
   list.innerHTML = '';
-  if(notes.length===0){
+  if(notes.length===0 && score>=90){
     card.classList.add('perfect');
     card.innerHTML = '✓ Perfectly aligned body line — great job!';
+  }else if(notes.length===0){
+    card.classList.remove('perfect');
+    card.innerHTML = '<h3>What to Fix</h3><p style="margin:0;color:var(--txt-dim);font-size:.9rem;">No single joint issue stood out, but the score reflects the overall line — compare against the reference line beside you.</p>';
   }else{
     card.classList.remove('perfect');
     card.innerHTML = '<h3>What to Fix</h3><ol id="notesList"></ol>';
