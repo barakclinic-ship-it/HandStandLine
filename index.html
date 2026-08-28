@@ -68,6 +68,8 @@
     transition:.15s;}
   .status-pill.ok{border-color:var(--good);color:var(--good);}
   .status-pill.warn{border-color:var(--warn);color:var(--warn);}
+  .start-now-btn{position:absolute;bottom:calc(74px + env(safe-area-inset-bottom,0px));left:50%;
+    transform:translateX(-50%);width:auto;max-width:none;padding:10px 22px;font-size:.9rem;z-index:5;}
   .countdown-num{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     font-size:8rem;font-weight:800;color:#fff;text-shadow:0 0 30px #2be8c8cc;z-index:6;
     pointer-events:none;transform:scaleX(1);}
@@ -79,9 +81,9 @@
   /* ---------- RESULT ---------- */
   #screen-result{padding:16px 16px calc(24px + env(safe-area-inset-bottom,0px));gap:14px;
     align-items:center;overflow-y:auto;}
-  .result-top{display:flex;width:100%;max-width:420px;justify-content:space-between;align-items:center;}
+  .result-top{display:flex;width:100%;max-width:420px;justify-content:space-between;align-items:center;flex-shrink:0;}
   .result-photo{position:relative;width:100%;max-width:420px;border-radius:20px;overflow:hidden;
-    border:1px solid var(--line);background:#000;}
+    border:1px solid var(--line);background:#000;flex-shrink:0;}
   .result-photo canvas{width:100%;display:block;}
   .score-wrap{display:flex;align-items:center;gap:14px;width:100%;max-width:420px;
     background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:14px 16px;}
@@ -165,6 +167,7 @@
       <button class="icon-btn" id="btnBack">✕</button>
       <button class="icon-btn" id="btnFlipCam">Flip</button>
     </div>
+    <button class="btn btn-primary start-now-btn" id="btnStartNow">Start Now</button>
     <div class="status-pill" id="statusPill">Initializing camera…</div>
   </section>
 
@@ -227,7 +230,9 @@ const state = {
   lockStart:null,
   countdownTimer:null,
   capturing:false,
-  captureEndAt:0,
+  captureMaxEndAt:0,
+  captureHasGood:false,
+  captureLastGoodAt:0,
   bestFrame:null,        // {score, landmarks, dataUrl, w, h}
   lastResult:null
 };
@@ -246,6 +251,11 @@ $('#btnBack').addEventListener('click', stopCameraFlow);
 $('#btnFlipCam').addEventListener('click', async ()=>{
   state.facing = state.facing==='environment' ? 'user' : 'environment';
   await setupCamera();
+});
+$('#btnStartNow').addEventListener('click', ()=>{
+  if(state.capturing || state.countdownTimer) return;
+  $('#btnStartNow').style.display='none';
+  startCountdown();
 });
 $('#btnResultClose').addEventListener('click', ()=>{ showScreen('home'); renderGallery(); });
 $('#btnRetry').addEventListener('click', startCameraFlow);
@@ -354,9 +364,11 @@ function resetCaptureState(){
   state.lockStart = null;
   state.capturing = false;
   state.bestFrame = null;
+  state.captureHasGood = false;
   clearTimeout(state.countdownTimer);
   $('#countdownNum').style.display='none';
   $('#capBadge').style.display='none';
+  $('#btnStartNow').style.display='block';
 }
 
 // ============================================================
@@ -429,8 +441,9 @@ function processFrame(lms){
   updateAutoZoom(liveGs);
 
   if(!lms){
+    if(state.capturing){ checkCaptureTimeout(); return; }
     setStatus('No body detected — step back and get in frame', 'warn');
-    if(!state.capturing) armLock(false);
+    armLock(false);
     return;
   }
 
@@ -438,15 +451,25 @@ function processFrame(lms){
   drawSkeleton(ctx, chips, w, h);
 
   if(state.capturing){
-    // scoring window: evaluate this frame and keep the straightest
-    const analysis = analyzeAlignment(chips, liveGs);
-    const dataUrl = snapshotVideo();
-    if(!state.bestFrame || analysis.score > state.bestFrame.score){
-      state.bestFrame = { score:analysis.score, chips, analysis, dataUrl, w:canvas.width, h:canvas.height, lms };
+    // extended capture window: keep scoring every frame the pose is
+    // clearly visible, so a hold of any length (2s or 10s) gets caught —
+    // finishes as soon as the pose is lost again, not on a fixed timer
+    const capturable = liveGs && liveGs.visible && liveGs.inFrame;
+    if(capturable){
+      const analysis = analyzeAlignment(chips, liveGs);
+      const dataUrl = snapshotVideo();
+      if(!state.bestFrame || analysis.score > state.bestFrame.score){
+        state.bestFrame = { score:analysis.score, chips, analysis, dataUrl, w:canvas.width, h:canvas.height, lms };
+      }
+      state.captureHasGood = true;
+      state.captureLastGoodAt = performance.now();
+      setStatus('Capturing — hold as long as you can…', 'ok');
+    }else if(state.captureHasGood){
+      setStatus('Lost the pose — wrapping up…', 'warn');
+    }else{
+      setStatus('Get into position — capturing now', 'ok');
     }
-    if(performance.now() >= state.captureEndAt){
-      finishCapture();
-    }
+    checkCaptureTimeout();
     return;
   }
 
@@ -461,6 +484,12 @@ function processFrame(lms){
   }
 }
 
+function checkCaptureTimeout(){
+  const now = performance.now();
+  if(now >= state.captureMaxEndAt){ finishCapture(); return; }
+  if(state.captureHasGood && (now - state.captureLastGoodAt) > 700){ finishCapture(); }
+}
+
 function armLock(good){
   if(good){
     if(!state.lockStart) state.lockStart = performance.now();
@@ -473,12 +502,15 @@ function armLock(good){
       clearTimeout(state.countdownTimer);
       state.countdownTimer = null;
       $('#countdownNum').style.display='none';
+      $('#btnStartNow').style.display='block';
     }
   }
 }
 
+const LEAD_IN_SECONDS = 3;
 function startCountdown(){
-  let n = 10;
+  $('#btnStartNow').style.display='none';
+  let n = LEAD_IN_SECONDS;
   const el = $('#countdownNum');
   el.style.display='flex';
   const tick = ()=>{
@@ -499,16 +531,27 @@ function beginCapture(){
   state.capturing = true;
   state.countdownTimer = null;
   state.bestFrame = null;
-  state.captureEndAt = performance.now() + 1400;
+  state.captureHasGood = false;
+  state.captureLastGoodAt = performance.now();
+  state.captureMaxEndAt = performance.now() + 9000; // hard cap — most attempts finish sooner
   $('#capBadge').style.display='block';
-  setStatus('Capturing — stay steady', 'ok');
+  $('#btnStartNow').style.display='none';
+  setStatus('Get into position — capturing now', 'ok');
 }
 
 function finishCapture(){
   state.capturing = false;
   $('#capBadge').style.display='none';
-  state.running = false;
   clearTimeout(state.countdownTimer);
+  if(!state.bestFrame){
+    // never got a clear, in-frame view of the pose — let them try again
+    // instead of showing a broken/empty result
+    state.lockStart = null;
+    setStatus('Could not get a clear shot — get in position and try again', 'warn');
+    $('#btnStartNow').style.display='block';
+    return; // state.running stays true — the detection loop keeps going
+  }
+  state.running = false;
   state.lastResult = state.bestFrame;
   if(state.stream){ state.stream.getTracks().forEach(t=>t.stop()); state.stream=null; }
   renderResult(state.lastResult);
@@ -544,10 +587,17 @@ function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
 
 function detectView(lms){
   const shX = Math.abs(lms[L.lsh].x - lms[L.rsh].x);
-  const hipX = Math.abs(lms[L.lhip].x - lms[L.rhip].x);
   const bodyH = Math.abs(mid(pt(lms,L.lsh),pt(lms,L.rsh)).y - mid(pt(lms,L.lank),pt(lms,L.rank)).y) || 0.3;
-  const ratio = ((shX+hipX)/2) / bodyH;
-  return ratio < 0.14 ? 'profile' : 'front';
+  // shoulders are almost always the most reliably visible landmarks, even
+  // when the lower body is partly out of frame, so they carry most of the
+  // weight; hips only get folded in when confidently visible, since a
+  // partly-cropped front pose can otherwise look falsely "profile"
+  let ratio = shX / bodyH;
+  if(vis(lms,L.lhip) > 0.4 && vis(lms,L.rhip) > 0.4){
+    const hipX = Math.abs(lms[L.lhip].x - lms[L.rhip].x);
+    ratio = ((shX*1.4)+hipX) / (2.4*bodyH);
+  }
+  return ratio < 0.11 ? 'profile' : 'front';
 }
 function detectStance(lms){
   const shY = mid(pt(lms,L.lsh),pt(lms,L.rsh)).y;
