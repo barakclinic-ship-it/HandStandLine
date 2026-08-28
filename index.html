@@ -52,7 +52,7 @@
   /* ---------- CAMERA ---------- */
   #screen-camera{background:#000;padding:0;overflow:hidden;}
   .cam-stage{position:relative;flex:1;overflow:hidden;display:flex;align-items:center;justify-content:center;}
-  .cam-wrap{position:relative;width:100%;height:100%;}
+  .cam-wrap{position:relative;width:100%;height:100%;transition:transform .08s linear;}
   .cam-wrap.mirrored{transform:scaleX(-1);}
   video#cam{width:100%;height:100%;object-fit:cover;display:block;background:#000;}
   canvas#overlay{position:absolute;inset:0;width:100%;height:100%;}
@@ -116,18 +116,26 @@
   <section id="screen-home" class="screen active">
     <div class="logo-wrap">
       <svg viewBox="0 0 200 200" width="100%" height="100%">
+        <defs>
+          <radialGradient id="jointGrad" cx="35%" cy="35%" r="65%">
+            <stop offset="0%" stop-color="#ffffff"/>
+            <stop offset="40%" stop-color="#2be8c8"/>
+            <stop offset="100%" stop-color="#2be8c8"/>
+          </radialGradient>
+        </defs>
         <circle cx="100" cy="100" r="86" fill="none" stroke="#2be8c8" stroke-opacity=".35" stroke-width="2"/>
-        <!-- handstand skeleton, side profile: one straight line from toes to hand on the ground -->
-        <path d="M 100,168 L 100,30" stroke="#7c8bff" stroke-width="4" stroke-linecap="round"/>
-        <circle cx="113" cy="122" r="11" fill="none" stroke="#7c8bff" stroke-width="3.2"/>
-        <g fill="#2be8c8" stroke="#04140f" stroke-width="1.4">
-          <circle cx="100" cy="168" r="6"/>
-          <circle cx="100" cy="140" r="5"/>
-          <circle cx="100" cy="90" r="5.4"/>
-          <circle cx="100" cy="60" r="5"/>
-          <circle cx="100" cy="30" r="5"/>
+        <!-- volumetric handstand skeleton, side profile: thick capsule bone + shaded joint balls -->
+        <path d="M 100,168 L 100,30" stroke="#7c8bff" stroke-width="12" stroke-linecap="round"/>
+        <path d="M 100,168 L 100,30" stroke="#ffffff" stroke-opacity=".3" stroke-width="4" stroke-linecap="round"/>
+        <circle cx="113" cy="122" r="12.5" fill="url(#jointGrad)" stroke="#04140f" stroke-width="2"/>
+        <g stroke="#04140f" stroke-width="1.8">
+          <circle cx="100" cy="168" r="8.5" fill="url(#jointGrad)"/>
+          <circle cx="100" cy="140" r="7" fill="url(#jointGrad)"/>
+          <circle cx="100" cy="90" r="7.4" fill="url(#jointGrad)"/>
+          <circle cx="100" cy="60" r="7" fill="url(#jointGrad)"/>
+          <circle cx="100" cy="30" r="7" fill="url(#jointGrad)"/>
         </g>
-        <line x1="60" y1="172" x2="140" y2="172" stroke="#ffffff" stroke-opacity=".45" stroke-width="2" stroke-dasharray="2 5"/>
+        <line x1="52" y1="175" x2="148" y2="175" stroke="#ffffff" stroke-opacity=".45" stroke-width="2" stroke-dasharray="2 5"/>
       </svg>
     </div>
     <h1 class="title">Hand<b>Stand</b>Line</h1>
@@ -318,7 +326,18 @@ async function setupCamera(){
   video.srcObject = stream;
   await new Promise(res=>{ video.onloadedmetadata = ()=>{ video.play(); res(); }; });
   state.mirrored = state.facing === 'user';
-  $('#camWrap').classList.toggle('mirrored', state.mirrored);
+  resetAutoZoom();
+
+  // start the physical lens as wide (zoomed-out) as the device allows, so less
+  // stepping back is needed to fit the whole body in frame
+  try{
+    const track = stream.getVideoTracks()[0];
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    if(caps && caps.zoom && typeof caps.zoom.min === 'number'){
+      await track.applyConstraints({ advanced:[{ zoom: caps.zoom.min }] });
+    }
+  }catch(e){ /* zoom control not supported on this device/browser — ignore */ }
+
   fitOverlay();
 }
 
@@ -341,6 +360,52 @@ function resetCaptureState(){
 }
 
 // ============================================================
+// Digital auto-framing — once the whole body is visible, smoothly
+// crop/zoom the live preview around the person (extra headroom is
+// reserved above for an overhead arm reach). Purely cosmetic: the
+// actual captured photo is always grabbed from the raw, un-zoomed
+// video frame, so this never affects detection or scoring.
+// ============================================================
+function resetAutoZoom(){
+  state.zoomScale = 1; state.zoomCx = 0.5; state.zoomCy = 0.5;
+  applyZoomTransform();
+}
+function lerpNum(a,b,t){ return a + (b-a)*t; }
+function updateAutoZoom(gs){
+  const camWrap = $('#camWrap');
+  if(!camWrap) return;
+  if(!gs || !gs.visible){
+    state.zoomScale = lerpNum(state.zoomScale ?? 1, 1, 0.12);
+    state.zoomCx = lerpNum(state.zoomCx ?? 0.5, 0.5, 0.12);
+    state.zoomCy = lerpNum(state.zoomCy ?? 0.5, 0.5, 0.12);
+    applyZoomTransform();
+    return;
+  }
+  const padTop = 0.30, padBottom = 0.10, padSide = 0.35; // extra top room for hands/feet reaching overhead
+  const bw = Math.max(0.05, gs.maxX-gs.minX);
+  const bh = Math.max(0.05, gs.maxY-gs.minY);
+  const boxW = bw*(1+2*padSide);
+  const boxH = bh*(1+padTop+padBottom);
+  const targetScale = Math.min(2.4, Math.max(1, 1/Math.max(boxW, boxH)));
+  const targetCx = gs.cx;
+  const targetCy = (gs.minY - bh*padTop + gs.maxY + bh*padBottom)/2;
+
+  state.zoomScale = lerpNum(state.zoomScale ?? 1, targetScale, 0.1);
+  state.zoomCx = lerpNum(state.zoomCx ?? 0.5, targetCx, 0.1);
+  state.zoomCy = lerpNum(state.zoomCy ?? 0.5, targetCy, 0.1);
+  applyZoomTransform();
+}
+function applyZoomTransform(){
+  const camWrap = $('#camWrap');
+  if(!camWrap) return;
+  const s = state.zoomScale || 1;
+  const dx = (0.5 - (state.zoomCx ?? 0.5)) * 100;
+  const dy = (0.5 - (state.zoomCy ?? 0.5)) * 100;
+  const mirror = state.mirrored ? 'scaleX(-1) ' : '';
+  camWrap.style.transform = `${mirror}scale(${s}) translate(${dx}%, ${dy}%)`;
+}
+
+// ============================================================
 // Main detection loop
 // ============================================================
 function loop(ts){
@@ -359,7 +424,9 @@ function processFrame(lms){
   const ctx = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
   ctx.clearRect(0,0,w,h);
-  drawGuide(ctx,w,h, lms ? geomStatus(lms) : null);
+  const liveGs = lms ? geomStatus(lms) : null;
+  drawGuide(ctx,w,h, liveGs);
+  updateAutoZoom(liveGs);
 
   if(!lms){
     setStatus('No body detected — step back and get in frame', 'warn');
@@ -372,7 +439,7 @@ function processFrame(lms){
 
   if(state.capturing){
     // scoring window: evaluate this frame and keep the straightest
-    const analysis = analyzeAlignment(chips, geomStatus(lms));
+    const analysis = analyzeAlignment(chips, liveGs);
     const dataUrl = snapshotVideo();
     if(!state.bestFrame || analysis.score > state.bestFrame.score){
       state.bestFrame = { score:analysis.score, chips, analysis, dataUrl, w:canvas.width, h:canvas.height, lms };
@@ -383,7 +450,7 @@ function processFrame(lms){
     return;
   }
 
-  const gs = geomStatus(lms);
+  const gs = liveGs;
   const ok = gs.inFrame && gs.centered && gs.visible;
   if(ok){
     setStatus(state.lockStart ? 'Great! Hold this position…' : 'Good position — locking…', 'ok');
@@ -494,8 +561,16 @@ function betterSide(lms){
 }
 
 function geomStatus(lms){
-  const need = [L.lsh,L.rsh,L.lel,L.rel,L.lwr,L.rwr,L.lhip,L.rhip,L.lknee,L.rknee,L.lank,L.rank];
-  const visible = need.every(i => vis(lms,i) > 0.35);
+  const view = detectView(lms);
+  let need;
+  if(view === 'profile'){
+    const side = betterSide(lms);
+    need = side==='r' ? [L.rsh,L.rel,L.rwr,L.rhip,L.rknee,L.rank] : [L.lsh,L.lel,L.lwr,L.lhip,L.lknee,L.lank];
+  }else{
+    need = [L.lsh,L.rsh,L.lel,L.rel,L.lwr,L.rwr,L.lhip,L.rhip,L.lknee,L.rknee,L.lank,L.rank];
+  }
+  const visThresh = view === 'profile' ? 0.3 : 0.35;
+  const visible = need.every(i => vis(lms,i) > visThresh);
   const xs = need.map(i=>lms[i].x), ys = need.map(i=>lms[i].y);
   const minX=Math.min(...xs), maxX=Math.max(...xs), minY=Math.min(...ys), maxY=Math.max(...ys);
   const bh = maxY-minY;
@@ -507,7 +582,7 @@ function geomStatus(lms){
   else if(bh <= 0.5) message = 'Move a bit closer to the camera';
   else if(bh >= 0.98) message = 'Move a bit further from the camera';
   else if(!centered) message = 'Move to the center of the frame';
-  return { visible, inFrame, centered, message, bh, cx };
+  return { visible, inFrame, centered, message, bh, cx, view, minX, maxX, minY, maxY };
 }
 
 function buildChips(lms){
@@ -516,6 +591,8 @@ function buildChips(lms){
   const side = betterSide(lms);
   const S = side==='r' ? {sh:L.rsh,el:L.rel,wr:L.rwr,idx:L.rindex,pnk:L.rpinky,hip:L.rhip,knee:L.rknee,ank:L.rank}
                        : {sh:L.lsh,el:L.lel,wr:L.lwr,idx:L.lindex,pnk:L.lpinky,hip:L.lhip,knee:L.lknee,ank:L.lank};
+  const F = side==='r' ? {hip:L.lhip,knee:L.lknee,ank:L.lank}
+                       : {hip:L.rhip,knee:L.rknee,ank:L.rank};
 
   function chipsFor(){
     if(view==='profile'){
@@ -528,10 +605,12 @@ function buildChips(lms){
       const ankle = pt(lms,S.ank);
       const chest = lerp(shoulder, hip, 0.28);
       const belly = lerp(shoulder, hip, 0.65);
+      const farVis = (vis(lms,F.hip)+vis(lms,F.knee)+vis(lms,F.ank))/3;
       return { view, stance, side,
         palm, wrist, elbow, shoulder, chest, belly, hip, knee, ankle,
         // for note-angle math
         elbowA:{a:shoulder,b:elbow,c:wrist}, kneeA:{a:hip,b:knee,c:ankle},
+        farHip:pt(lms,F.hip), farKnee:pt(lms,F.knee), farAnkle:pt(lms,F.ank), farVis,
         lineRef:[palm,wrist,elbow,shoulder,chest,belly,hip,knee,ankle]
       };
     }else{
@@ -547,6 +626,7 @@ function buildChips(lms){
       return { view, stance, side,
         palm, wrist, elbow, shoulder, chest, belly, hip, knee, ankle,
         shL:pt(lms,L.lsh), shR:pt(lms,L.rsh), hipL:pt(lms,L.lhip), hipR:pt(lms,L.rhip),
+        wristL:pt(lms,L.lwr), wristR:pt(lms,L.rwr),
         kneeL:pt(lms,L.lknee), kneeR:pt(lms,L.rknee), ankL:pt(lms,L.lank), ankR:pt(lms,L.rank),
         elbowA:{a:shoulder,b:elbow,c:wrist}, kneeA:{a:hip,b:knee,c:ankle},
         lineRef:[palm,wrist,elbow,shoulder,chest,belly,hip,knee,ankle]
@@ -595,57 +675,67 @@ function analyzeAlignment(chips, gs){
   // colinearity (how well all points sit on one straight line)
   const devs = chips.lineRef.map(p => Math.abs(perpDist(p, line)));
   const rms = Math.sqrt(devs.reduce((s,d)=>s+d*d,0)/devs.length) / bodyLen;
-  score -= Math.min(30, rms * 550);
+  score -= Math.min(40, rms * 750);
 
   // verticality of the stack line
-  const vertDeviationDeg = Math.min(
-    Math.abs(90 - Math.abs(Math.atan2(line.dir.y, line.dir.x)*180/Math.PI)),
-    Math.abs(Math.abs(Math.atan2(line.dir.y, line.dir.x)*180/Math.PI))
-  );
   const tiltDeg = 90 - Math.abs((Math.atan2(Math.abs(line.dir.y), Math.abs(line.dir.x)))*180/Math.PI);
-  score -= Math.min(12, Math.abs(tiltDeg)*0.6);
+  score -= Math.min(16, Math.abs(tiltDeg)*0.8);
 
   // elbows
   const elbowAngle = angleAt(chips.elbowA.a, chips.elbowA.b, chips.elbowA.c);
-  if(elbowAngle < 160){
+  if(elbowAngle < 165){
     notes.push('Straighten elbows');
-    score -= Math.min(18, (160-elbowAngle)*0.9);
+    score -= Math.min(24, (165-elbowAngle)*1.3);
   }
 
-  // knees
+  // knees (near/front leg)
   const kneeAngle = angleAt(chips.kneeA.a, chips.kneeA.b, chips.kneeA.c);
-  if(kneeAngle < 165){
+  if(kneeAngle < 170){
     notes.push('Engage quads (straighten knees)');
-    score -= Math.min(18, (165-kneeAngle)*0.8);
+    score -= Math.min(24, (170-kneeAngle)*1.3);
   }
 
   // hip / shoulder deviation from the line -> belly / shoulder / glute cues
   const hipDev = perpDist(chips.hip, line) / bodyLen;
   const shDev = perpDist(chips.shoulder, line) / bodyLen;
-  const THRESH = 0.028;
+  const THRESH = 0.018;
   if(Math.abs(hipDev) > THRESH){
     if(hipDev > 0) notes.push('Engage core / tuck belly (hips tilt forward off the line)');
     else notes.push('Squeeze glutes (hips pushed back off the line)');
-    score -= Math.min(16, Math.abs(hipDev)*260);
+    score -= Math.min(22, Math.abs(hipDev)*340);
   }
   if(Math.abs(shDev) > THRESH){
     notes.push('Open shoulders (shoulders off the body line)');
-    score -= Math.min(14, Math.abs(shDev)*260);
+    score -= Math.min(20, Math.abs(shDev)*340);
   }
 
-  // legs together (mostly meaningful front/back, still checked profile via ankle/knee spacing proxy)
+  // legs together — front/back view: knees & ankles must stay adducted
   if(chips.view === 'front'){
     const kneeGap = dist(chips.kneeL, chips.kneeR) / bodyLen;
     const ankGap = dist(chips.ankL, chips.ankR) / bodyLen;
     const hipGap = dist(chips.hipL, chips.hipR) / bodyLen;
-    if(kneeGap > hipGap*0.85){ notes.push('Bring knees together'); score -= 8; }
-    if(ankGap > hipGap*0.85){ notes.push('Bring ankles together'); score -= 8; }
+    if(kneeGap > hipGap*0.7){ notes.push('Bring knees together'); score -= 12; }
+    if(ankGap > hipGap*0.7){ notes.push('Bring ankles together'); score -= 12; }
 
     // two straight lines: shoulder line & hip line should be level (perpendicular to stack line)
     const shAngle = Math.atan2(chips.shR.y-chips.shL.y, chips.shR.x-chips.shL.x)*180/Math.PI;
     const hipAngle = Math.atan2(chips.hipR.y-chips.hipL.y, chips.hipR.x-chips.hipL.x)*180/Math.PI;
-    if(Math.abs(shAngle) > 9){ notes.push('Open shoulders (shoulder line not level)'); score -= 6; }
-    if(Math.abs(hipAngle) > 9){ notes.push('Squeeze glutes (hip line not level)'); score -= 6; }
+    if(Math.abs(shAngle) > 6){ notes.push('Open shoulders (shoulder line not level)'); score -= 10; }
+    if(Math.abs(hipAngle) > 6){ notes.push('Squeeze glutes (hip line not level)'); score -= 10; }
+  }
+
+  // profile view — check the far (hidden) leg too, when MediaPipe can still estimate it
+  if(chips.view === 'profile' && chips.farVis > 0.15){
+    const farKneeAngle = angleAt(chips.farHip, chips.farKnee, chips.farAnkle);
+    if(farKneeAngle < 168){
+      notes.push('Straighten the back (hidden) leg — it is bent and breaking the hip line');
+      score -= Math.min(20, (168-farKneeAngle)*1.1);
+    }
+    const legGap = dist(chips.ankle, chips.farAnkle) / bodyLen;
+    if(legGap > 0.05){
+      notes.push('Bring your legs/feet together — the back leg is drifting apart');
+      score -= 10;
+    }
   }
 
   score = Math.max(0, Math.min(100, Math.round(score)));
@@ -690,23 +780,47 @@ const CHIP_COLORS = {
 const CHIP_ORDER = ['palm','wrist','elbow','shoulder','chest','belly','hip','knee','ankle'];
 const CHIP_LABELS = {palm:'Palm',wrist:'Wrist',elbow:'Elbow',shoulder:'Shoulder',chest:'Sternum',belly:'Belly',hip:'Hip',knee:'Knee',ankle:'Ankle'};
 
+// a thick, round-capped stroke reads as a solid capsule/bone shape on canvas
+function strokeBone(ctx, x1,y1,x2,y2, width, color, highlight){
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  if(highlight){
+    ctx.globalAlpha = 0.35;
+    ctx.strokeStyle = highlight;
+    ctx.lineWidth = Math.max(1, width*0.32);
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  }
+  ctx.restore();
+}
+// a shaded, ball-like joint marker (radial gradient) for visual "volume"
+function drawJoint(ctx, x, y, r, color){
+  const grad = ctx.createRadialGradient(x-r*0.35,y-r*0.35,r*0.12, x,y,r);
+  grad.addColorStop(0, '#ffffff');
+  grad.addColorStop(0.4, color);
+  grad.addColorStop(1, color);
+  ctx.beginPath();
+  ctx.arc(x,y,r,0,Math.PI*2);
+  ctx.fillStyle = grad;
+  ctx.fill();
+  ctx.lineWidth = Math.max(1, r*0.3);
+  ctx.strokeStyle = '#04140f';
+  ctx.stroke();
+}
+
 function drawSkeleton(ctx, chips, w, h){
   ctx.save();
-  // connecting line through the stack
-  ctx.strokeStyle = 'rgba(43,232,200,.8)';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  CHIP_ORDER.forEach((k,i)=>{
-    const p = chips[k];
-    const x = p.x*w, y = p.y*h;
-    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-  });
-  ctx.stroke();
+  const boneW = Math.max(7, Math.min(w,h)*0.032);
+  const P = k => ({x:chips[k].x*w, y:chips[k].y*h});
 
-  // fitted straight line (target)
+  // fitted straight target line, drawn first so the volumetric bones sit on top
   const line = fitLine(chips.lineRef);
   const len = Math.max(w,h)*1.3;
-  ctx.strokeStyle = 'rgba(255,255,255,.55)';
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,.5)';
   ctx.lineWidth = 1.5;
   ctx.setLineDash([2,5]);
   ctx.beginPath();
@@ -714,26 +828,39 @@ function drawSkeleton(ctx, chips, w, h){
   ctx.lineTo((line.origin.x + line.dir.x*len/w)*w, (line.origin.y + line.dir.y*len/h)*h);
   ctx.stroke();
   ctx.setLineDash([]);
+  ctx.restore();
 
-  // if front/back, also draw shoulder & hip cross-lines
-  if(chips.view==='front' && chips.shL){
-    ctx.strokeStyle = 'rgba(255,159,74,.85)';
-    ctx.beginPath(); ctx.moveTo(chips.shL.x*w,chips.shL.y*h); ctx.lineTo(chips.shR.x*w,chips.shR.y*h); ctx.stroke();
-    ctx.strokeStyle = 'rgba(255,77,94,.85)';
-    ctx.beginPath(); ctx.moveTo(chips.hipL.x*w,chips.hipL.y*h); ctx.lineTo(chips.hipR.x*w,chips.hipR.y*h); ctx.stroke();
+  // main measured stack — thick capsule "bones" between each chip
+  for(let i=0;i<CHIP_ORDER.length-1;i++){
+    const a = P(CHIP_ORDER[i]), b = P(CHIP_ORDER[i+1]);
+    strokeBone(ctx, a.x,a.y,b.x,b.y, boneW, 'rgba(43,232,200,.55)', '#ffffff');
   }
 
-  // dots
+  // front/back view — mark the actual limb points (both hands, both feet) and level lines
+  if(chips.view==='front' && chips.shL){
+    const elbowAvg = P('elbow'), kneeAvg = P('knee');
+    const thin = boneW*0.55;
+    strokeBone(ctx, elbowAvg.x,elbowAvg.y, chips.wristL.x*w,chips.wristL.y*h, thin, 'rgba(255,159,74,.6)');
+    strokeBone(ctx, elbowAvg.x,elbowAvg.y, chips.wristR.x*w,chips.wristR.y*h, thin, 'rgba(255,159,74,.6)');
+    strokeBone(ctx, kneeAvg.x,kneeAvg.y, chips.ankL.x*w,chips.ankL.y*h, thin, 'rgba(255,77,94,.6)');
+    strokeBone(ctx, kneeAvg.x,kneeAvg.y, chips.ankR.x*w,chips.ankR.y*h, thin, 'rgba(255,77,94,.6)');
+
+    ctx.strokeStyle = 'rgba(255,255,255,.55)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(chips.shL.x*w,chips.shL.y*h); ctx.lineTo(chips.shR.x*w,chips.shR.y*h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(chips.hipL.x*w,chips.hipL.y*h); ctx.lineTo(chips.hipR.x*w,chips.hipR.y*h); ctx.stroke();
+
+    [['wristL','#2be8c8'],['wristR','#2be8c8'],['ankL','#34d399'],['ankR','#34d399'],
+     ['shL','#ff9f4a'],['shR','#ff9f4a'],['hipL','#ff4d5e'],['hipR','#ff4d5e']].forEach(([k,c])=>{
+      const p = chips[k];
+      drawJoint(ctx, p.x*w, p.y*h, boneW*0.34, c);
+    });
+  }
+
+  // main chip joints, on top
   CHIP_ORDER.forEach(k=>{
     const p = chips[k];
-    const x = p.x*w, y = p.y*h;
-    ctx.beginPath();
-    ctx.arc(x,y, k==='hip'?7:5.5, 0, Math.PI*2);
-    ctx.fillStyle = CHIP_COLORS[k];
-    ctx.fill();
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = '#04140f';
-    ctx.stroke();
+    drawJoint(ctx, p.x*w, p.y*h, k==='hip' ? boneW*0.52 : boneW*0.44, CHIP_COLORS[k]);
   });
   ctx.restore();
 }
