@@ -82,9 +82,15 @@
   #screen-result{padding:16px 16px calc(24px + env(safe-area-inset-bottom,0px));gap:14px;
     align-items:center;overflow-y:auto;}
   .result-top{display:flex;width:100%;max-width:420px;justify-content:space-between;align-items:center;flex-shrink:0;}
-  .result-photo{position:relative;width:100%;max-width:420px;border-radius:20px;overflow:hidden;
+  .result-row{display:flex;gap:8px;width:100%;max-width:420px;align-items:stretch;flex-shrink:0;}
+  .result-photo{position:relative;flex:1 1 auto;min-width:0;border-radius:20px;overflow:hidden;
     border:1px solid var(--line);background:#000;flex-shrink:0;}
   .result-photo canvas{width:100%;display:block;}
+  .result-reference{flex:0 0 27%;background:var(--panel);border:1px solid var(--line);
+    border-radius:16px;padding:6px;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:4px;}
+  .ref-label{font-size:.66rem;color:var(--txt-dim);font-weight:600;text-align:center;}
+  .result-reference svg{width:100%;height:auto;}
   .score-wrap{display:flex;align-items:center;gap:14px;width:100%;max-width:420px;
     background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:14px 16px;}
   .score-ring{position:relative;width:74px;height:74px;flex:0 0 auto;}
@@ -178,7 +184,13 @@
       <div style="font-weight:700;font-size:.95rem;">Result</div>
       <div style="width:40px;"></div>
     </div>
-    <div class="result-photo"><canvas id="resultCanvas"></canvas></div>
+    <div class="result-row">
+      <div class="result-photo"><canvas id="resultCanvas"></canvas></div>
+      <div class="result-reference">
+        <div class="ref-label">Ideal form</div>
+        <div id="refDiagram"></div>
+      </div>
+    </div>
     <div class="score-wrap">
       <div class="score-ring">
         <svg viewBox="0 0 80 80">
@@ -586,18 +598,23 @@ function lerp(a,b,t){ return {x:a.x+(b.x-a.x)*t, y:a.y+(b.y-a.y)*t}; }
 function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
 
 function detectView(lms){
+  // primary signal: left/right visibility asymmetry. A true profile/side
+  // view means one whole side of the body is occluded behind the other,
+  // so its landmarks come back consistently less confident; a front view
+  // has both sides similarly visible.
+  const leftVis = (vis(lms,L.lsh)+vis(lms,L.lel)+vis(lms,L.lwr)+vis(lms,L.lhip)+vis(lms,L.lknee)+vis(lms,L.lank))/6;
+  const rightVis = (vis(lms,L.rsh)+vis(lms,L.rel)+vis(lms,L.rwr)+vis(lms,L.rhip)+vis(lms,L.rknee)+vis(lms,L.rank))/6;
+  const visDiff = Math.abs(leftVis - rightVis);
+
+  // secondary/confirming signal: how compressed the shoulders look on screen
   const shX = Math.abs(lms[L.lsh].x - lms[L.rsh].x);
   const bodyH = Math.abs(mid(pt(lms,L.lsh),pt(lms,L.rsh)).y - mid(pt(lms,L.lank),pt(lms,L.rank)).y) || 0.3;
-  // shoulders are almost always the most reliably visible landmarks, even
-  // when the lower body is partly out of frame, so they carry most of the
-  // weight; hips only get folded in when confidently visible, since a
-  // partly-cropped front pose can otherwise look falsely "profile"
-  let ratio = shX / bodyH;
-  if(vis(lms,L.lhip) > 0.4 && vis(lms,L.rhip) > 0.4){
-    const hipX = Math.abs(lms[L.lhip].x - lms[L.rhip].x);
-    ratio = ((shX*1.4)+hipX) / (2.4*bodyH);
-  }
-  return ratio < 0.11 ? 'profile' : 'front';
+  const geomRatio = shX / bodyH;
+
+  // only call it "profile" when BOTH a real occlusion is visible AND the
+  // shoulders read as compressed — a single noisy signal isn't enough,
+  // which is what was misclassifying clean front-facing shots before
+  return (visDiff > 0.22 && geomRatio < 0.16) ? 'profile' : 'front';
 }
 function detectStance(lms){
   const shY = mid(pt(lms,L.lsh),pt(lms,L.rsh)).y;
@@ -856,103 +873,94 @@ const CHIP_COLORS = {
 const CHIP_ORDER = ['wrist','elbow','shoulder','ribs','hip','knee','ankle'];
 const CHIP_LABELS = {wrist:'Wrist',elbow:'Elbow',shoulder:'Shoulder',neckT1:'Neck (T1)',ribs:'Ribs',hip:'Pelvis',knee:'Knee',ankle:'Ankle'};
 
-// a thick, round-capped stroke reads as a solid capsule/bone shape on canvas
-function strokeBone(ctx, x1,y1,x2,y2, width, color, highlight){
+// a thin, round-capped white stroke with just a touch of volume — a plain
+// tracking skeleton that reads clearly and moves cleanly with the person
+function strokeBone(ctx, x1,y1,x2,y2, width){
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  ctx.strokeStyle = color;
+  ctx.strokeStyle = 'rgba(255,255,255,.92)';
   ctx.lineWidth = width;
   ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
-  if(highlight){
-    ctx.globalAlpha = 0.35;
-    ctx.strokeStyle = highlight;
-    ctx.lineWidth = Math.max(1, width*0.32);
-    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
-  }
+  ctx.globalAlpha = 0.28;
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = Math.max(1, width*0.4);
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
   ctx.restore();
 }
-// a shaded, ball-like joint marker (radial gradient) for visual "volume"
+// a small colour-coded chip marker at each anatomical landmark
 function drawJoint(ctx, x, y, r, color){
-  const grad = ctx.createRadialGradient(x-r*0.35,y-r*0.35,r*0.12, x,y,r);
-  grad.addColorStop(0, '#ffffff');
-  grad.addColorStop(0.4, color);
-  grad.addColorStop(1, color);
   ctx.beginPath();
   ctx.arc(x,y,r,0,Math.PI*2);
-  ctx.fillStyle = grad;
+  ctx.fillStyle = color;
   ctx.fill();
-  ctx.lineWidth = Math.max(1, r*0.3);
+  ctx.lineWidth = Math.max(1, r*0.35);
   ctx.strokeStyle = '#04140f';
   ctx.stroke();
 }
 
+// simple tracking skeleton: thin white bones (slight volume) + small
+// colour-coded chip dots at the correct anatomical points — used live and
+// on the result photo
 function drawSkeleton(ctx, chips, w, h){
   ctx.save();
-  const boneW = Math.max(7, Math.min(w,h)*0.032);
+  const boneW = Math.max(4, Math.min(w,h)*0.014);
   const P = k => ({x:chips[k].x*w, y:chips[k].y*h});
   const chainPts = CHIP_ORDER.map(P);
   const neckP = P('neckT1');
-
-  // ---- plumb reference line placed beside the figure, with thin tie-lines
-  // to every chip so deviation from a true straight line is directly visible
-  const allPts = [...chainPts, neckP];
-  const maxX = Math.max(...allPts.map(p=>p.x));
-  const minY = Math.min(...allPts.map(p=>p.y)) - boneW*2;
-  const maxY = Math.max(...allPts.map(p=>p.y)) + boneW*2;
-  const margin = Math.max(26, w*0.08);
-  // drop the plumb line from the base of support (hand for handstand, foot for standing)
-  const anchor = chips.stance === 'handstand' ? P('wrist') : P('ankle');
-  let refX = anchor.x - margin;
-  if(refX < margin*0.6) refX = maxX + margin; // keep it on-canvas if too close to the edge
-
-  ctx.save();
-  ctx.strokeStyle = 'rgba(255,255,255,.55)';
-  ctx.lineWidth = 2;
-  ctx.setLineDash([3,6]);
-  ctx.beginPath(); ctx.moveTo(refX, minY); ctx.lineTo(refX, maxY); ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.strokeStyle = 'rgba(255,255,255,.35)';
-  ctx.lineWidth = 1;
-  allPts.forEach(p=>{ ctx.beginPath(); ctx.moveTo(refX, p.y); ctx.lineTo(p.x, p.y); ctx.stroke(); });
-  ctx.restore();
-
-  // main measured stack — thick capsule "bones" between each chip
-  for(let i=0;i<chainPts.length-1;i++){
-    strokeBone(ctx, chainPts[i].x,chainPts[i].y, chainPts[i+1].x,chainPts[i+1].y, boneW, 'rgba(43,232,200,.55)', '#ffffff');
-  }
-  // neck/T1 branches off the shoulder
   const shP = P('shoulder');
-  strokeBone(ctx, shP.x,shP.y, neckP.x,neckP.y, boneW*0.7, 'rgba(199,125,255,.6)', '#ffffff');
 
-  // front/back view — mark the actual limb points (both hands, both feet) and level lines
-  if(chips.view==='front' && chips.shL){
-    const elbowAvg = P('elbow'), kneeAvg = P('knee');
-    const thin = boneW*0.55;
-    strokeBone(ctx, elbowAvg.x,elbowAvg.y, chips.wristL.x*w,chips.wristL.y*h, thin, 'rgba(255,159,74,.6)');
-    strokeBone(ctx, elbowAvg.x,elbowAvg.y, chips.wristR.x*w,chips.wristR.y*h, thin, 'rgba(255,159,74,.6)');
-    strokeBone(ctx, kneeAvg.x,kneeAvg.y, chips.ankL.x*w,chips.ankL.y*h, thin, 'rgba(255,77,94,.6)');
-    strokeBone(ctx, kneeAvg.x,kneeAvg.y, chips.ankR.x*w,chips.ankR.y*h, thin, 'rgba(255,77,94,.6)');
-
-    ctx.strokeStyle = 'rgba(255,255,255,.55)';
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(chips.shL.x*w,chips.shL.y*h); ctx.lineTo(chips.shR.x*w,chips.shR.y*h); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(chips.hipL.x*w,chips.hipL.y*h); ctx.lineTo(chips.hipR.x*w,chips.hipR.y*h); ctx.stroke();
-
-    [['wristL','#2be8c8'],['wristR','#2be8c8'],['ankL','#34d399'],['ankR','#34d399'],
-     ['shL','#ff9f4a'],['shR','#ff9f4a'],['hipL','#ff4d5e'],['hipR','#ff4d5e']].forEach(([k,c])=>{
-      const p = chips[k];
-      drawJoint(ctx, p.x*w, p.y*h, boneW*0.34, c);
-    });
+  for(let i=0;i<chainPts.length-1;i++){
+    strokeBone(ctx, chainPts[i].x,chainPts[i].y, chainPts[i+1].x,chainPts[i+1].y, boneW);
   }
+  strokeBone(ctx, shP.x,shP.y, neckP.x,neckP.y, boneW*0.8);
 
-  // main chip joints, on top
   CHIP_ORDER.forEach(k=>{
     const p = chips[k];
-    drawJoint(ctx, p.x*w, p.y*h, k==='hip' ? boneW*0.52 : boneW*0.44, CHIP_COLORS[k]);
+    drawJoint(ctx, p.x*w, p.y*h, boneW*1.7, CHIP_COLORS[k]);
   });
-  drawJoint(ctx, neckP.x, neckP.y, boneW*0.4, CHIP_COLORS.neckT1);
+  drawJoint(ctx, neckP.x, neckP.y, boneW*1.4, CHIP_COLORS.neckT1);
   ctx.restore();
+}
+
+// a small "how it should look if perfect" reference diagram for the
+// detected view/stance combo, shown beside the result photo
+function referenceDiagramSVG(view, stance){
+  const isHandstand = stance === 'handstand';
+  const Y = isHandstand
+    ? { wrist:150, elbow:125, shoulder:98, ribs:75, hip:55, knee:32, ankle:14 }
+    : { ankle:155, knee:130, hip:103, ribs:80, shoulder:58, elbow:33, wrist:15 };
+  const neckY = Y.shoulder - 8;
+  const cx = 50;
+  const order = isHandstand
+    ? ['wrist','elbow','shoulder','ribs','hip','knee','ankle']
+    : ['ankle','knee','hip','ribs','shoulder','elbow','wrist'];
+
+  let bones = '';
+  for(let i=0;i<order.length-1;i++){
+    bones += `<line x1="${cx}" y1="${Y[order[i]]}" x2="${cx}" y2="${Y[order[i+1]]}" stroke="rgba(255,255,255,.85)" stroke-width="3.4" stroke-linecap="round"/>`;
+  }
+  bones += `<line x1="${cx}" y1="${Y.shoulder}" x2="${cx+9}" y2="${neckY}" stroke="rgba(255,255,255,.85)" stroke-width="2.6" stroke-linecap="round"/>`;
+
+  let dots = order.map(k=>`<circle cx="${cx}" cy="${Y[k]}" r="4.4" fill="${CHIP_COLORS[k]}" stroke="#04140f" stroke-width="1.2"/>`).join('');
+  dots += `<circle cx="${cx+9}" cy="${neckY}" r="3.6" fill="${CHIP_COLORS.neckT1}" stroke="#04140f" stroke-width="1.2"/>`;
+
+  let extras = '';
+  if(view === 'front'){
+    // front view's ideal: hands together, feet together, level shoulder/hip lines
+    extras += `<circle cx="${cx-5}" cy="${Y.wrist}" r="3.2" fill="${CHIP_COLORS.wrist}" stroke="#04140f" stroke-width="1"/>`;
+    extras += `<circle cx="${cx+5}" cy="${Y.wrist}" r="3.2" fill="${CHIP_COLORS.wrist}" stroke="#04140f" stroke-width="1"/>`;
+    extras += `<circle cx="${cx-4}" cy="${Y.ankle}" r="3" fill="${CHIP_COLORS.ankle}" stroke="#04140f" stroke-width="1"/>`;
+    extras += `<circle cx="${cx+4}" cy="${Y.ankle}" r="3" fill="${CHIP_COLORS.ankle}" stroke="#04140f" stroke-width="1"/>`;
+    extras += `<line x1="${cx-9}" y1="${Y.shoulder}" x2="${cx+9}" y2="${Y.shoulder}" stroke="rgba(255,159,74,.7)" stroke-width="1.6"/>`;
+    extras += `<line x1="${cx-8}" y1="${Y.hip}" x2="${cx+8}" y2="${Y.hip}" stroke="rgba(255,77,94,.7)" stroke-width="1.6"/>`;
+  }
+  const groundY = isHandstand ? Y.wrist+6 : Y.ankle+6;
+
+  return `<svg viewBox="0 0 100 170" xmlns="http://www.w3.org/2000/svg">
+    ${bones}${extras}${dots}
+    <line x1="30" y1="${groundY}" x2="70" y2="${groundY}" stroke="rgba(255,255,255,.35)" stroke-width="1.4" stroke-dasharray="2 4"/>
+  </svg>`;
 }
 
 // ============================================================
@@ -969,6 +977,7 @@ function renderResult(frame){
     drawSkeleton(ctx, frame.chips, canvas.width, canvas.height);
   };
   img.src = frame.dataUrl;
+  $('#refDiagram').innerHTML = referenceDiagramSVG(frame.chips.view, frame.chips.stance);
 
   const { score, notes } = frame.analysis;
   const circumference = 213.6;
@@ -987,7 +996,7 @@ function renderResult(frame){
     card.innerHTML = '✓ Perfectly aligned body line — great job!';
   }else if(notes.length===0){
     card.classList.remove('perfect');
-    card.innerHTML = '<h3>What to Fix</h3><p style="margin:0;color:var(--txt-dim);font-size:.9rem;">No single joint issue stood out, but the score reflects the overall line — compare against the reference line beside you.</p>';
+    card.innerHTML = '<h3>What to Fix</h3><p style="margin:0;color:var(--txt-dim);font-size:.9rem;">No single joint issue stood out, but the score reflects the overall line — compare against the ideal form diagram.</p>';
   }else{
     card.classList.remove('perfect');
     card.innerHTML = '<h3>What to Fix</h3><ol id="notesList"></ol>';
