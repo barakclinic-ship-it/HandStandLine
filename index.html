@@ -134,24 +134,41 @@
     <div class="logo-wrap">
       <svg viewBox="0 0 200 200" width="100%" height="100%">
         <circle cx="100" cy="100" r="86" fill="none" stroke="#2be8c8" stroke-opacity=".35" stroke-width="2"/>
-        <!-- front-view handstand skeleton: hands together on the ground, legs together up,
-             shoulder/hip level ticks — matches the in-app front-view style -->
-        <line x1="100" y1="168" x2="100" y2="20" stroke="#ffffff" stroke-opacity=".92" stroke-width="4" stroke-linecap="round"/>
-        <line x1="100" y1="168" x2="100" y2="20" stroke="#ffffff" stroke-opacity=".25" stroke-width="7" stroke-linecap="round"/>
-        <line x1="100" y1="110" x2="118" y2="96" stroke="#ffffff" stroke-opacity=".92" stroke-width="3" stroke-linecap="round"/>
-        <line x1="82" y1="110" x2="118" y2="110" stroke="#ff9f4a" stroke-opacity=".75" stroke-width="2.6"/>
-        <line x1="84" y1="62" x2="116" y2="62" stroke="#ff4d5e" stroke-opacity=".75" stroke-width="2.6"/>
+        <!-- front-view handstand skeleton with real body width: shoulder line, rib cage,
+             pelvis and both arms/legs — matches the in-app anatomical frame -->
+        <g stroke="#ffffff" stroke-opacity=".9" stroke-width="3.4" stroke-linecap="round">
+          <line x1="84" y1="168" x2="87" y2="140"/>
+          <line x1="87" y1="140" x2="90" y2="110"/>
+          <line x1="116" y1="168" x2="113" y2="140"/>
+          <line x1="113" y1="140" x2="110" y2="110"/>
+          <line x1="90" y1="110" x2="110" y2="110"/>
+          <line x1="94" y1="62" x2="106" y2="62"/>
+          <line x1="100" y1="110" x2="93" y2="85"/>
+          <line x1="93" y1="85" x2="94" y2="62"/>
+          <line x1="100" y1="110" x2="107" y2="85"/>
+          <line x1="107" y1="85" x2="106" y2="62"/>
+          <line x1="94" y1="62" x2="92" y2="40"/>
+          <line x1="92" y1="40" x2="91" y2="20"/>
+          <line x1="106" y1="62" x2="108" y2="40"/>
+          <line x1="108" y1="40" x2="109" y2="20"/>
+          <line x1="100" y1="110" x2="100" y2="122"/>
+        </g>
         <g stroke="#04140f" stroke-width="1.6">
-          <circle cx="88" cy="168" r="6" fill="#2be8c8"/>
-          <circle cx="112" cy="168" r="6" fill="#2be8c8"/>
-          <circle cx="100" cy="140" r="6" fill="#ffd23f"/>
-          <circle cx="100" cy="110" r="6.4" fill="#ff9f4a"/>
-          <circle cx="100" cy="85" r="6" fill="#ff6b9d"/>
-          <circle cx="100" cy="62" r="6.6" fill="#ff4d5e"/>
-          <circle cx="100" cy="40" r="6" fill="#4dd0ff"/>
-          <circle cx="91" cy="20" r="5.6" fill="#34d399"/>
-          <circle cx="109" cy="20" r="5.6" fill="#34d399"/>
-          <circle cx="118" cy="96" r="5" fill="#c77dff"/>
+          <circle cx="84" cy="168" r="5.6" fill="#2be8c8"/>
+          <circle cx="116" cy="168" r="5.6" fill="#2be8c8"/>
+          <circle cx="87" cy="140" r="5" fill="#ffd23f"/>
+          <circle cx="113" cy="140" r="5" fill="#ffd23f"/>
+          <circle cx="90" cy="110" r="5.6" fill="#ff9f4a"/>
+          <circle cx="110" cy="110" r="5.6" fill="#ff9f4a"/>
+          <circle cx="93" cy="85" r="5" fill="#ff6b9d"/>
+          <circle cx="107" cy="85" r="5" fill="#ff6b9d"/>
+          <circle cx="94" cy="62" r="5.6" fill="#ff4d5e"/>
+          <circle cx="106" cy="62" r="5.6" fill="#ff4d5e"/>
+          <circle cx="92" cy="40" r="5" fill="#4dd0ff"/>
+          <circle cx="108" cy="40" r="5" fill="#4dd0ff"/>
+          <circle cx="91" cy="20" r="5.2" fill="#34d399"/>
+          <circle cx="109" cy="20" r="5.2" fill="#34d399"/>
+          <circle cx="100" cy="122" r="6.4" fill="#c77dff"/>
         </g>
         <line x1="55" y1="175" x2="145" y2="175" stroke="#ffffff" stroke-opacity=".4" stroke-width="2" stroke-dasharray="2 5"/>
       </svg>
@@ -680,8 +697,9 @@ function buildChips(lms){
       const knee = pt(lms,S.knee);
       const ankle = pt(lms,S.ank);
       const ribs = lerp(shoulder, hip, 0.35);
-      // T1 vertebra / base-of-neck proxy: partway from shoulder toward the nose
-      const neckT1 = lerp(shoulder, pt(lms,L.nose), 0.35);
+      // real detected head position (nose landmark) — not an offset guess,
+      // so it always sits exactly where the head actually is
+      const neckT1 = pt(lms,L.nose);
       const farVis = (vis(lms,F.hip)+vis(lms,F.knee)+vis(lms,F.ank))/3;
       return { view, stance, side,
         wrist, elbow, shoulder, neckT1, ribs, hip, knee, ankle,
@@ -698,10 +716,14 @@ function buildChips(lms){
       const knee = mid(pt(lms,L.lknee),pt(lms,L.rknee));
       const ankle = mid(pt(lms,L.lank),pt(lms,L.rank));
       const ribs = lerp(shoulder, hip, 0.35);
-      const neckT1 = lerp(shoulder, pt(lms,L.nose), 0.35);
+      // real detected head position (nose landmark) — not an offset guess
+      const neckT1 = pt(lms,L.nose);
+      const shLp = pt(lms,L.lsh), shRp = pt(lms,L.rsh), hipLp = pt(lms,L.lhip), hipRp = pt(lms,L.rhip);
       return { view, stance, side,
         wrist, elbow, shoulder, neckT1, ribs, hip, knee, ankle,
-        shL:pt(lms,L.lsh), shR:pt(lms,L.rsh), hipL:pt(lms,L.lhip), hipR:pt(lms,L.rhip),
+        shL:shLp, shR:shRp, hipL:hipLp, hipR:hipRp,
+        ribsL: lerp(shLp, hipLp, 0.35), ribsR: lerp(shRp, hipRp, 0.35),
+        elbowL:pt(lms,L.lel), elbowR:pt(lms,L.rel),
         wristL:pt(lms,L.lwr), wristR:pt(lms,L.rwr),
         kneeL:pt(lms,L.lknee), kneeR:pt(lms,L.rknee), ankL:pt(lms,L.lank), ankR:pt(lms,L.rank),
         elbowA:{a:shoulder,b:elbow,c:wrist}, kneeA:{a:hip,b:knee,c:ankle},
@@ -917,11 +939,56 @@ function drawSkeleton(ctx, chips, w, h){
   ctx.save();
   const boneW = Math.max(4, Math.min(w,h)*0.014);
   const P = k => ({x:chips[k].x*w, y:chips[k].y*h});
+  const isFront = chips.view === 'front' && chips.shL;
+
+  if(isFront){
+    // proper anatomical frame with real body width — shoulder line, hip line,
+    // spine, both arms and both legs — not just a single centre line
+    const shL=P('shL'), shR=P('shR'), hipL=P('hipL'), hipR=P('hipR');
+    const elbowL=P('elbowL'), elbowR=P('elbowR'), wristL=P('wristL'), wristR=P('wristR');
+    const kneeL=P('kneeL'), kneeR=P('kneeR'), ankL=P('ankL'), ankR=P('ankR');
+    const ribsL=P('ribsL'), ribsR=P('ribsR');
+    const neckP=P('neckT1');
+    const midSh = {x:(shL.x+shR.x)/2, y:(shL.y+shR.y)/2};
+    const midHip = {x:(hipL.x+hipR.x)/2, y:(hipL.y+hipR.y)/2};
+    const frame = [
+      [wristL,elbowL],[elbowL,shL],[wristR,elbowR],[elbowR,shR],
+      [shL,shR],[hipL,hipR],
+      [midSh,ribsL],[ribsL,hipL],[midSh,ribsR],[ribsR,hipR],
+      [hipL,kneeL],[kneeL,ankL],[hipR,kneeR],[kneeR,ankR],
+      [midSh,neckP]
+    ];
+    const dots = [
+      [wristL,CHIP_COLORS.wrist],[wristR,CHIP_COLORS.wrist],
+      [elbowL,CHIP_COLORS.elbow],[elbowR,CHIP_COLORS.elbow],
+      [shL,CHIP_COLORS.shoulder],[shR,CHIP_COLORS.shoulder],
+      [ribsL,CHIP_COLORS.ribs],[ribsR,CHIP_COLORS.ribs],
+      [hipL,CHIP_COLORS.hip],[hipR,CHIP_COLORS.hip],
+      [kneeL,CHIP_COLORS.knee],[kneeR,CHIP_COLORS.knee],
+      [ankL,CHIP_COLORS.ankle],[ankR,CHIP_COLORS.ankle],
+      [neckP,CHIP_COLORS.neckT1]
+    ];
+
+    // ghost echo behind
+    const gdx = Math.max(4, boneW*0.9), gdy = -Math.max(4, boneW*0.9);
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    frame.forEach(([a,b])=>strokeBone(ctx, a.x+gdx,a.y+gdy, b.x+gdx,b.y+gdy, boneW*0.75, 'rgba(150,150,150,.9)'));
+    dots.forEach(([p])=>drawJoint(ctx, p.x+gdx, p.y+gdy, boneW*1.15, '#8a8a8a'));
+    ctx.restore();
+
+    frame.forEach(([a,b])=>strokeBone(ctx, a.x,a.y, b.x,b.y, boneW*0.85));
+    dots.forEach(([p,c])=>drawJoint(ctx, p.x, p.y, boneW*1.5, c));
+    ctx.restore();
+    return;
+  }
+
+  // profile view: a true side-on view has no visible body width, so the
+  // single measured chain (with its ghost echo) is the correct rendering
   const chainPts = CHIP_ORDER.map(P);
   const neckP = P('neckT1');
   const shP = P('shoulder');
 
-  // ghost echo — same skeleton, offset a few px, drawn first so it sits behind
   const gdx = Math.max(4, boneW*0.9), gdy = -Math.max(4, boneW*0.9);
   ctx.save();
   ctx.globalAlpha = 0.5;
@@ -951,12 +1018,72 @@ function drawSkeleton(ctx, chips, w, h){
 
 // a small "how it should look if perfect" reference diagram for the
 // detected view/stance combo, shown beside the result photo
+// grid + dashed crosshair background, matching the Tracking Point diagram style
+function refGridSVG(cx){
+  return `
+    <defs>
+      <pattern id="refGrid" width="10" height="10" patternUnits="userSpaceOnUse">
+        <path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="0.5"/>
+      </pattern>
+    </defs>
+    <rect x="0" y="0" width="100" height="170" fill="url(#refGrid)"/>
+    <line x1="${cx}" y1="0" x2="${cx}" y2="170" stroke="rgba(255,255,255,.18)" stroke-width="0.7" stroke-dasharray="1.5 3"/>
+    <line x1="0" y1="85" x2="100" y2="85" stroke="rgba(255,255,255,.18)" stroke-width="0.7" stroke-dasharray="1.5 3"/>`;
+}
+
 function referenceDiagramSVG(view, stance){
   const isHandstand = stance === 'handstand';
+
+  if(view === 'front'){
+    // full anatomical frame with real body width, matching the live/result skeleton
+    const Y = isHandstand
+      ? { wrist:150, elbow:125, shoulder:98, ribs:75, hip:55, knee:32, ankle:14 }
+      : { ankle:155, knee:130, hip:103, ribs:80, shoulder:58, elbow:33, wrist:15 };
+    const cx = 50;
+    const dx = { wrist:8, elbow:7, shoulder:10, ribs:7, hip:8, knee:5, ankle:4 };
+    const neckY = Y.shoulder + (Y.elbow - Y.shoulder)*0.4; // tucked toward the arm, correct for both stances
+    const pt = (k,side) => ({x: cx + side*dx[k], y: Y[k]});
+    const L_ = k => pt(k,-1), R_ = k => pt(k, 1);
+    const midSh = { x:cx, y:Y.shoulder }, neckP = { x:cx, y:neckY };
+
+    const frame = [
+      [L_('wrist'),L_('elbow')],[L_('elbow'),L_('shoulder')],
+      [R_('wrist'),R_('elbow')],[R_('elbow'),R_('shoulder')],
+      [L_('shoulder'),R_('shoulder')],[L_('hip'),R_('hip')],
+      [midSh,L_('ribs')],[L_('ribs'),L_('hip')],[midSh,R_('ribs')],[R_('ribs'),R_('hip')],
+      [L_('hip'),L_('knee')],[L_('knee'),L_('ankle')],[R_('hip'),R_('knee')],[R_('knee'),R_('ankle')],
+      [midSh,neckP]
+    ];
+    const dots = [
+      [L_('wrist'),CHIP_COLORS.wrist],[R_('wrist'),CHIP_COLORS.wrist],
+      [L_('elbow'),CHIP_COLORS.elbow],[R_('elbow'),CHIP_COLORS.elbow],
+      [L_('shoulder'),CHIP_COLORS.shoulder],[R_('shoulder'),CHIP_COLORS.shoulder],
+      [L_('ribs'),CHIP_COLORS.ribs],[R_('ribs'),CHIP_COLORS.ribs],
+      [L_('hip'),CHIP_COLORS.hip],[R_('hip'),CHIP_COLORS.hip],
+      [L_('knee'),CHIP_COLORS.knee],[R_('knee'),CHIP_COLORS.knee],
+      [L_('ankle'),CHIP_COLORS.ankle],[R_('ankle'),CHIP_COLORS.ankle],
+      [neckP,CHIP_COLORS.neckT1]
+    ];
+    const gdx=3, gdy=-3;
+    const ghost = frame.map(([a,b])=>`<line x1="${a.x+gdx}" y1="${a.y+gdy}" x2="${b.x+gdx}" y2="${b.y+gdy}" stroke="rgba(150,150,150,.75)" stroke-width="2.2" stroke-linecap="round"/>`).join('')
+      + dots.map(([p])=>`<circle cx="${p.x+gdx}" cy="${p.y+gdy}" r="2.6" fill="#8a8a8a"/>`).join('');
+    const bones = frame.map(([a,b])=>`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="rgba(255,255,255,.85)" stroke-width="3" stroke-linecap="round"/>`).join('');
+    const dotsSvg = dots.map(([p,c])=>`<circle cx="${p.x}" cy="${p.y}" r="3.8" fill="${c}" stroke="#04140f" stroke-width="1"/>`).join('');
+    const groundY = isHandstand ? Y.wrist+6 : Y.ankle+6;
+    const grid = refGridSVG(cx);
+    return `<svg viewBox="0 0 100 170" xmlns="http://www.w3.org/2000/svg">
+      ${grid}
+      ${ghost}${bones}${dotsSvg}
+      <line x1="24" y1="${groundY}" x2="76" y2="${groundY}" stroke="rgba(255,255,255,.35)" stroke-width="1.4" stroke-dasharray="2 4"/>
+    </svg>`;
+  }
+
+  // profile: a true side-on view has no visible body width, so the single
+  // measured chain is the correct rendering
   const Y = isHandstand
     ? { wrist:150, elbow:125, shoulder:98, ribs:75, hip:55, knee:32, ankle:14 }
     : { ankle:155, knee:130, hip:103, ribs:80, shoulder:58, elbow:33, wrist:15 };
-  const neckY = Y.shoulder - 8;
+  const neckY = Y.shoulder + (Y.elbow - Y.shoulder)*0.4; // tucked toward the arm, correct for both stances
   const cx = 50;
   const order = isHandstand
     ? ['wrist','elbow','shoulder','ribs','hip','knee','ankle']
@@ -980,32 +1107,12 @@ function referenceDiagramSVG(view, stance){
   let dots = order.map(k=>`<circle cx="${cx}" cy="${Y[k]}" r="4.4" fill="${CHIP_COLORS[k]}" stroke="#04140f" stroke-width="1.2"/>`).join('');
   dots += `<circle cx="${cx+9}" cy="${neckY}" r="3.6" fill="${CHIP_COLORS.neckT1}" stroke="#04140f" stroke-width="1.2"/>`;
 
-  let extras = '';
-  if(view === 'front'){
-    // front view's ideal: hands together, feet together, level shoulder/hip lines
-    extras += `<circle cx="${cx-5}" cy="${Y.wrist}" r="3.2" fill="${CHIP_COLORS.wrist}" stroke="#04140f" stroke-width="1"/>`;
-    extras += `<circle cx="${cx+5}" cy="${Y.wrist}" r="3.2" fill="${CHIP_COLORS.wrist}" stroke="#04140f" stroke-width="1"/>`;
-    extras += `<circle cx="${cx-4}" cy="${Y.ankle}" r="3" fill="${CHIP_COLORS.ankle}" stroke="#04140f" stroke-width="1"/>`;
-    extras += `<circle cx="${cx+4}" cy="${Y.ankle}" r="3" fill="${CHIP_COLORS.ankle}" stroke="#04140f" stroke-width="1"/>`;
-    extras += `<line x1="${cx-9}" y1="${Y.shoulder}" x2="${cx+9}" y2="${Y.shoulder}" stroke="rgba(255,159,74,.7)" stroke-width="1.6"/>`;
-    extras += `<line x1="${cx-8}" y1="${Y.hip}" x2="${cx+8}" y2="${Y.hip}" stroke="rgba(255,77,94,.7)" stroke-width="1.6"/>`;
-  }
   const groundY = isHandstand ? Y.wrist+6 : Y.ankle+6;
-
-  // grid + dashed crosshair background, matching the Tracking Point diagram style
-  const grid = `
-    <defs>
-      <pattern id="refGrid" width="10" height="10" patternUnits="userSpaceOnUse">
-        <path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="0.5"/>
-      </pattern>
-    </defs>
-    <rect x="0" y="0" width="100" height="170" fill="url(#refGrid)"/>
-    <line x1="${cx}" y1="0" x2="${cx}" y2="170" stroke="rgba(255,255,255,.18)" stroke-width="0.7" stroke-dasharray="1.5 3"/>
-    <line x1="0" y1="85" x2="100" y2="85" stroke="rgba(255,255,255,.18)" stroke-width="0.7" stroke-dasharray="1.5 3"/>`;
+  const grid = refGridSVG(cx);
 
   return `<svg viewBox="0 0 100 170" xmlns="http://www.w3.org/2000/svg">
     ${grid}
-    ${ghost}${bones}${extras}${dots}
+    ${ghost}${bones}${dots}
     <line x1="30" y1="${groundY}" x2="70" y2="${groundY}" stroke="rgba(255,255,255,.35)" stroke-width="1.4" stroke-dasharray="2 4"/>
   </svg>`;
 }
